@@ -1,0 +1,70 @@
+{
+  "nodes": [
+    {
+      "id": "ACC_D9FEC0FB",
+      "type": "account"
+    },
+    {
+      "id": "ACC_4B1BC956",
+      "type": "account",
+      "traceable_paise": 500000,
+      "traceable_rupees": 5000.0
+    },
+    {
+      "id": "ACC_AF0EBB55",
+      "type": "account",
+      "traceable_paise": 100000,
+      "traceable_rupees": 1000.0
+    },
+    {
+      "id": "ACC_FBF2BB7D",
+      "type": "account",
+      "traceable_paise": 350000,
+      "traceable_rupees": 3500.0
+    },
+    {
+      "id": "ACC_53C6BEE6",
+      "type": "account",
+      "traceable_paise": 50000,
+      "traceable_rupees": 500.0
+    }
+  ],
+  "edges": [
+    {
+      "source": "ACC_D9FEC0FB",
+      "target": "ACC_4B1BC956",
+      "transaction_id": "TXN_02BBEFBF",
+      "amount_paise": 1000000,
+      "amount_rupees": 10000.0,
+      "timestamp": "2026-11-25 10:20:34",
+      "status": "COMPLETED"
+    },
+    {
+      "source": "ACC_4B1BC956",
+      "target": "ACC_AF0EBB55",
+      "transaction_id": "TXN_102B8154",
+      "amount_paise": 600000,
+      "amount_rupees": 6000.0,
+      "timestamp": "2026-11-25 10:20:34",
+      "status": "COMPLETED"
+    },
+    {
+      "source": "ACC_4B1BC956",
+      "target": "ACC_FBF2BB7D",
+      "transaction_id": "TXN_4FB3BFCF",
+      "amount_paise": 400000,
+      "amount_rupees": 4000.0,
+      "timestamp": "2026-11-25 10:20:34",
+      "status": "COMPLETED"
+    },
+    {
+      "source": "ACC_FBF2BB7D",
+      "target": "ACC_53C6BEE6",
+      "transaction_id": "TXN_4F54E60A",
+      "amount_paise": 250000,
+      "amount_rupees": 2500.0,
+      "timestamp": "2026-11-25 10:20:34",
+      "status": "COMPLETED"
+    }
+  ]
+}
