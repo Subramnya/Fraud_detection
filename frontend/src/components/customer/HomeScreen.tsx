@@ -13,27 +13,33 @@ import {
   HelpCircle,
   Clock,
   ChevronRight,
+  ShieldAlert,
+  Lock,
 } from 'lucide-react';
-import type { Account, CustomerTab, Transaction } from '../../types';
+import type { Account, AppNotification, CustomerTab, Transaction } from '../../types';
 import { api } from '../../services/api';
 
 interface HomeScreenProps {
   account: Account;
   allAccounts: Account[];
   transactions: Transaction[];
+  notifications?: AppNotification[];
   onNavigate: (tab: CustomerTab) => void;
   onSelectRecipient: (acc: Account) => void;
   onBalanceUpdated: () => void;
-  onNotify: (type: 'success' | 'error' | 'info', title: string, msg: string) => void;
+  onFreezeAccount?: () => void;
+  onNotify: (type: 'success' | 'warning' | 'error' | 'info', title: string, msg: string) => void;
 }
 
 export const HomeScreen: React.FC<HomeScreenProps> = ({
   account,
   allAccounts,
   transactions,
+  notifications = [],
   onNavigate,
   onSelectRecipient,
   onBalanceUpdated,
+  onFreezeAccount,
   onNotify,
 }) => {
   const [showBalance, setShowBalance] = useState(true);
@@ -43,7 +49,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const [topupLoading, setTopupLoading] = useState(false);
 
   const otherAccounts = allAccounts.filter(
-    (a) => a.account_id !== account.account_id && a.is_active
+    (a) => a.account_id !== account.account_id && a.is_active && a.account_type !== 'FRAUDSTER_PARTNER'
+  );
+
+  const activeRedAlert = notifications.find(
+    (n) => !n.is_read && (n.severity === 'CRITICAL' || n.severity === 'HIGH')
   );
 
   const filteredContacts = otherAccounts.filter(
@@ -77,8 +87,36 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 
   return (
     <div className="max-w-md mx-auto px-4 pt-4 pb-24 space-y-5">
-      {/* Wallet Balance Card */}
-      <div className="rounded-3xl bg-gradient-to-br from-[#351080] via-[#5B2EFF] to-[#7B4DFF] p-5 text-white shadow-xl">
+      {/* Red Alert Banner with Freeze Account button */}
+      {activeRedAlert && !account.is_frozen && (
+        <div className="rounded-3xl bg-red-50 border-2 border-[#DC2626] p-4 shadow-md space-y-2.5">
+          <div className="flex items-start gap-2.5">
+            <ShieldAlert className="w-5 h-5 text-[#DC2626] shrink-0 mt-0.5" />
+            <div>
+              <p className="text-xs font-bold text-[#DC2626]">{activeRedAlert.title}</p>
+              <p className="text-xs text-gray-800 mt-0.5">{activeRedAlert.message}</p>
+            </div>
+          </div>
+          {onFreezeAccount && (
+            <button
+              onClick={onFreezeAccount}
+              className="w-full py-2.5 rounded-xl bg-[#DC2626] hover:bg-red-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition"
+            >
+              <Lock className="w-4 h-4" /> Freeze Account Immediately
+            </button>
+          )}
+        </div>
+      )}
+
+      {account.is_frozen && (
+        <div className="rounded-3xl bg-red-100 border border-[#DC2626] p-3.5 text-xs text-[#DC2626] font-bold flex items-center gap-2">
+          <Lock className="w-4 h-4 shrink-0" />
+          <span>Account FROZEN. All transactions are stopped. Check Notifications for your report.</span>
+        </div>
+      )}
+
+      {/* Wallet Balance Card (Vibrant Green + Orange on Beige) */}
+      <div className="rounded-3xl bg-gradient-to-br from-[#15803D] via-[#16A34A] to-[#F97316] p-5 text-white shadow-xl">
         <div className="flex items-center justify-between">
           <div>
             <p className="text-xs text-purple-200 font-medium">Virtual Wallet Balance</p>
@@ -86,8 +124,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               <span className="text-2xl font-bold tracking-tight">
                 {showBalance
                   ? `₹${account.balance_rupees.toLocaleString('en-IN', {
-                      minimumFractionDigits: 2,
-                    })}`
+                    minimumFractionDigits: 2,
+                  })}`
                   : '₹ ••••••'}
               </span>
               <button
@@ -270,11 +308,10 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     <div
-                      className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                        isOutgoing
+                      className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${isOutgoing
                           ? 'bg-red-50 text-[#DC2626]'
                           : 'bg-green-50 text-[#16A34A]'
-                      }`}
+                        }`}
                     >
                       {isOutgoing ? (
                         <ArrowUpRight className="w-4 h-4" />
@@ -295,9 +332,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                   </div>
                   <div className="text-right shrink-0">
                     <p
-                      className={`text-xs font-bold ${
-                        isOutgoing ? 'text-[#201A32]' : 'text-[#16A34A]'
-                      }`}
+                      className={`text-xs font-bold ${isOutgoing ? 'text-[#201A32]' : 'text-[#16A34A]'
+                        }`}
                     >
                       {isOutgoing ? '-' : '+'}₹{txn.amount_rupees.toLocaleString('en-IN')}
                     </p>

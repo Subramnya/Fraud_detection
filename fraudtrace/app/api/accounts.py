@@ -97,3 +97,70 @@ def get_allocations(account_id: str, db: Session = Depends(get_db)):
         return get_account_allocations(db, account_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+class AccountTypeUpdate(BaseModel):
+    account_type: str = Field(..., pattern="^(NORMAL|FRAUDSTER)$")
+
+
+@router.patch("/{account_id}/role")
+def update_account_role(account_id: str, request: AccountTypeUpdate, db: Session = Depends(get_db)):
+    """Mark an account as NORMAL or FRAUDSTER for demo purposes."""
+    acc = db.query(Account).filter(Account.account_id == account_id).first()
+    if not acc:
+        raise HTTPException(status_code=404, detail=f"Account {account_id} not found")
+    acc.account_type = request.account_type
+    db.commit()
+    return {"account_id": acc.account_id, "account_type": acc.account_type}
+
+
+@router.delete("/{account_id}")
+def delete_account(account_id: str, db: Session = Depends(get_db)):
+    """Delete an account and its dependent records (demo/admin cleanup)."""
+    from sqlalchemy import text
+    acc = db.query(Account).filter(Account.account_id == account_id).first()
+    if not acc:
+        raise HTTPException(status_code=404, detail=f"Account {account_id} not found")
+
+    user_id = acc.user_id
+    db.execute(text("PRAGMA foreign_keys=OFF"))
+    for tbl, col in [
+        ("notifications", "account_id"),
+        ("freeze_requests", "account_id"),
+        ("risk_assessments", "account_id"),
+        ("fraud_alerts", "account_id"),
+        ("fraud_cases", "reporting_account_id"),
+        ("ledger_entries", "account_id"),
+        ("fund_allocations", "account_id"),
+        ("cybercell_reports", "account_id"),
+    ]:
+        db.execute(text(f"DELETE FROM {tbl} WHERE {col} = :aid"), {"aid": account_id})
+    db.execute(
+        text("DELETE FROM transactions WHERE sender_account_id = :aid OR receiver_account_id = :aid"),
+        {"aid": account_id},
+    )
+    db.execute(text("DELETE FROM accounts WHERE account_id = :aid"), {"aid": account_id})
+    db.execute(text("DELETE FROM users WHERE user_id = :uid"), {"uid": user_id})
+    db.execute(text("PRAGMA foreign_keys=ON"))
+    db.commit()
+    return {"deleted": True, "account_id": account_id}
+
+
+@router.get("/{account_id}/fraud-warning")
+def check_fraud_warning(account_id: str, db: Session = Depends(get_db)):
+    """Check if an account has actually been detected for fraud earlier."""
+    from fraudtrace.app.models.fraud_alert import FraudAlert
+    from fraudtrace.app.models.fraud_case import FraudCase
+    acc = db.query(Account).filter(Account.account_id == account_id).first()
+    if not acc:
+        raise HTTPException(status_code=404, detail=f"Account {account_id} not found")
+
+    alert_count = db.query(FraudAlert).filter(FraudAlert.account_id == account_id).count()
+    case_count = db.query(FraudCase).filter(FraudCase.reporting_account_id == account_id).count()
+    detected_earlier = alert_count > 0 or case_count > 0 or bool(getattr(acc, "is_frozen", False))
+    return {
+        "account_id": account_id,
+        "detected_earlier": detected_earlier,
+        "alert_count": alert_count,
+        "case_count": case_count,
+    }

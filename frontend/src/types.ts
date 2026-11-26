@@ -1,4 +1,4 @@
-export type AppMode = 'CUSTOMER' | 'BANKER';
+export type AppMode = 'USER' | 'FRAUDSTER' | 'BANKER' | 'CYBERCELL' | 'AI_MODEL' | 'DB_VIEWER';
 
 export type CustomerTab =
   | 'home'
@@ -24,12 +24,14 @@ export interface Account {
   account_name: string;
   balance_rupees: number;
   is_active: boolean;
+  is_frozen?: boolean;
   account_type: string;
   created_at?: string;
 }
 
 export interface Transaction {
   transaction_id: string;
+  trace_id?: string | null;
   sender_account_id: string;
   receiver_account_id: string;
   amount_rupees: number;

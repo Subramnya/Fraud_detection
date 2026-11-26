@@ -6,7 +6,7 @@ from fraudtrace.app.models.transaction import Transaction
 from fraudtrace.app.models.audit_log import AuditLog
 from fraudtrace.app.services.ledger_service import record_debit, record_credit
 from fraudtrace.app.services.allocation_service import allocate_outgoing
-from fraudtrace.app.utils.identifiers import generate_transaction_id, generate_log_id
+from fraudtrace.app.utils.identifiers import generate_transaction_id, generate_log_id, generate_trace_id
 from fraudtrace.app.utils.helpers import paise_to_rupees, rupees_to_paise
 
 
@@ -25,14 +25,14 @@ def process_payment(db: Session, sender_account_id: str, receiver_account_id: st
     sender = db.query(Account).filter(Account.account_id == sender_account_id).with_for_update().first()
     if not sender:
         raise ValueError(f"Sender account {sender_account_id} not found")
-    if not sender.is_active:
-        raise ValueError(f"Sender account {sender_account_id} is inactive")
+    if getattr(sender, "is_frozen", False) or not sender.is_active:
+        raise ValueError(f"Sender account {sender_account_id} is frozen/inactive. All transactions are stopped.")
 
     receiver = db.query(Account).filter(Account.account_id == receiver_account_id).with_for_update().first()
     if not receiver:
         raise ValueError(f"Receiver account {receiver_account_id} not found")
-    if not receiver.is_active:
-        raise ValueError(f"Receiver account {receiver_account_id} is inactive")
+    if getattr(receiver, "is_frozen", False) or not receiver.is_active:
+        raise ValueError(f"Receiver account {receiver_account_id} is frozen/inactive. Cannot receive funds.")
 
     if sender.balance_paise < amount_paise:
         raise ValueError(
@@ -40,12 +40,32 @@ def process_payment(db: Session, sender_account_id: str, receiver_account_id: st
             f"Required: ₹{amount_rupees}"
         )
 
-    # Generate transaction ID
+    # Consistent Trace ID per user / fraud chain
+    # Use sender's active traced allocation if present, else sender's persistent user_trace_id
+    from fraudtrace.app.models.allocation import FundAllocation
+    traced_alloc = (
+        db.query(FundAllocation)
+        .filter(
+            FundAllocation.account_id == sender_account_id,
+            FundAllocation.is_active == True,
+            FundAllocation.trace_id.isnot(None),
+        )
+        .first()
+    )
+    if traced_alloc and traced_alloc.trace_id:
+        trace_id = traced_alloc.trace_id
+    elif getattr(sender, "user_trace_id", None):
+        trace_id = sender.user_trace_id
+    else:
+        trace_id = generate_trace_id()
+        sender.user_trace_id = trace_id
+
     txn_id = generate_transaction_id()
 
     # Create transaction record
     txn = Transaction(
         transaction_id=txn_id,
+        trace_id=trace_id,
         sender_account_id=sender_account_id,
         receiver_account_id=receiver_account_id,
         amount_paise=amount_paise,
@@ -94,6 +114,7 @@ def process_payment(db: Session, sender_account_id: str, receiver_account_id: st
 
     return {
         "transaction_id": txn_id,
+        "trace_id": trace_id,
         "sender_account_id": sender_account_id,
         "receiver_account_id": receiver_account_id,
         "amount_rupees": amount_rupees,
@@ -111,6 +132,7 @@ def get_transaction(db: Session, transaction_id: str) -> dict:
         raise ValueError(f"Transaction {transaction_id} not found")
     return {
         "transaction_id": txn.transaction_id,
+        "trace_id": txn.trace_id,
         "sender_account_id": txn.sender_account_id,
         "receiver_account_id": txn.receiver_account_id,
         "amount_rupees": paise_to_rupees(txn.amount_paise),
@@ -134,6 +156,7 @@ def get_transaction_history(db: Session, account_id: str = None) -> dict:
         "transactions": [
             {
                 "transaction_id": t.transaction_id,
+                "trace_id": t.trace_id,
                 "sender_account_id": t.sender_account_id,
                 "receiver_account_id": t.receiver_account_id,
                 "amount_rupees": paise_to_rupees(t.amount_paise),

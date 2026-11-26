@@ -7,6 +7,7 @@ from fraudtrace.app.core.database import Base
 class Transaction(Base):
     __tablename__ = "transactions"
     transaction_id = Column(String, primary_key=True, index=True)
+    trace_id = Column(String, nullable=True, index=True)
     sender_account_id = Column(String, ForeignKey("accounts.account_id"), nullable=False, index=True)
     receiver_account_id = Column(String, ForeignKey("accounts.account_id"), nullable=False, index=True)
     amount_paise = Column(Integer, nullable=False)

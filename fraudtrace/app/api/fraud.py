@@ -174,6 +174,7 @@ def get_alert_detail(alert_id: str, db: Session = Depends(get_db)):
         "risk_score": alert.risk_score,
         "severity": alert.severity,
         "status": alert.status,
+        "evidence": json.loads(alert.evidence) if alert.evidence else None,
         "created_at": alert.created_at,
         "transaction": txn,
         "account_risk_score": latest_risk.overall_score if latest_risk else None,

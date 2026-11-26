@@ -7,7 +7,7 @@ from fraudtrace.app.models.audit_log import AuditLog
 from fraudtrace.app.models.allocation import FundAllocation
 from fraudtrace.app.utils.identifiers import (
     generate_user_id, generate_account_id, generate_allocation_id,
-    generate_log_id,
+    generate_log_id, generate_trace_id,
 )
 from fraudtrace.app.utils.helpers import rupees_to_paise, paise_to_rupees
 
@@ -23,6 +23,7 @@ def register_account(db: Session, name: str, email: str, phone: str = None,
 
     user_id = generate_user_id()
     account_id = generate_account_id()
+    user_trace_id = generate_trace_id()
     initial_paise = rupees_to_paise(initial_balance_rupees)
 
     user = User(
@@ -37,6 +38,7 @@ def register_account(db: Session, name: str, email: str, phone: str = None,
         account_name=name,
         balance_paise=initial_paise,
         account_type=account_type,
+        user_trace_id=user_trace_id,
     )
     db.add(user)
     db.add(account)
@@ -72,6 +74,7 @@ def register_account(db: Session, name: str, email: str, phone: str = None,
         "account_name": name,
         "balance_rupees": paise_to_rupees(account.balance_paise),
         "is_active": account.is_active,
+        "is_frozen": bool(getattr(account, "is_frozen", False)),
         "account_type": account.account_type,
         "created_at": account.created_at,
     }
@@ -88,6 +91,7 @@ def get_account(db: Session, account_id: str) -> dict:
         "account_name": account.account_name,
         "balance_rupees": paise_to_rupees(account.balance_paise),
         "is_active": account.is_active,
+        "is_frozen": bool(getattr(account, "is_frozen", False)),
         "account_type": account.account_type,
         "created_at": account.created_at,
     }
@@ -103,6 +107,7 @@ def get_all_accounts(db: Session) -> list:
             "account_name": a.account_name,
             "balance_rupees": paise_to_rupees(a.balance_paise),
             "is_active": a.is_active,
+            "is_frozen": bool(getattr(a, "is_frozen", False)),
             "account_type": a.account_type,
             "created_at": a.created_at,
         }

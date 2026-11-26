@@ -11,6 +11,7 @@ import {
 import { Html5Qrcode } from 'html5-qrcode';
 import type { Account, Transaction } from '../../types';
 import { api, parseFraudTraceQR } from '../../services/api';
+import { ConfirmDialog } from '../ConfirmDialog';
 
 interface ScanPayScreenProps {
   senderAccount: Account;
@@ -38,6 +39,9 @@ export const ScanPayScreen: React.FC<ScanPayScreenProps> = ({
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
   const [showConfirm, setShowConfirm] = useState(false);
+  const [upiPin, setUpiPin] = useState('');
+  const [pinError, setPinError] = useState<string | null>(null);
+  const [fraudWarningOpen, setFraudWarningOpen] = useState(false);
   const [paying, setPaying] = useState(false);
 
   const scannerRef = useRef<Html5Qrcode | null>(null);
@@ -70,8 +74,8 @@ export const ScanPayScreen: React.FC<ScanPayScreenProps> = ({
     const targetId = parsed
       ? parsed.recipient_account_id
       : rawText.trim().startsWith('ACC_')
-      ? rawText.trim()
-      : null;
+        ? rawText.trim()
+        : null;
 
     if (!targetId) {
       setQrError(
@@ -391,6 +395,24 @@ export const ScanPayScreen: React.FC<ScanPayScreenProps> = ({
             )}
           </div>
 
+          <div>
+            <label className="block text-xs font-semibold text-[#777184] mb-1">
+              Virtual UPI PIN (Demo PIN: 0000)
+            </label>
+            <input
+              type="password"
+              maxLength={4}
+              value={upiPin}
+              onChange={(e) => {
+                setUpiPin(e.target.value);
+                setPinError(null);
+              }}
+              placeholder="Enter 4-digit PIN (0000)"
+              className="w-full px-3.5 py-2.5 rounded-xl border border-purple-200 text-sm tracking-widest focus:outline-none focus:ring-2 focus:ring-[#5B2EFF]"
+            />
+            {pinError && <p className="text-xs text-[#DC2626] mt-1">{pinError}</p>}
+          </div>
+
           <div className="flex gap-3">
             <button
               onClick={() => setShowConfirm(false)}
@@ -400,7 +422,24 @@ export const ScanPayScreen: React.FC<ScanPayScreenProps> = ({
               Edit
             </button>
             <button
-              onClick={() => void handleConfirmPayment()}
+              onClick={async () => {
+                if (upiPin.trim() !== '0000') {
+                  setPinError('Invalid Virtual UPI PIN. Use 0000 for demo.');
+                  return;
+                }
+                if (recipient) {
+                  try {
+                    const warn = await api.checkAccountFraudWarning(recipient.account_id);
+                    if (warn.detected_earlier) {
+                      setFraudWarningOpen(true);
+                      return;
+                    }
+                  } catch {
+                    // continue
+                  }
+                }
+                void handleConfirmPayment();
+              }}
               disabled={paying}
               className="flex-1 py-3 rounded-xl bg-[#16A34A] hover:bg-green-700 text-white font-semibold text-sm disabled:opacity-50"
             >
@@ -409,6 +448,21 @@ export const ScanPayScreen: React.FC<ScanPayScreenProps> = ({
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={fraudWarningOpen}
+        title="Fraud Warning — Detected Earlier"
+        description="Are you sure? Do you want to really make the payment? Because this person has been detected as a fraud earlier."
+        confirmLabel="Yes, Pay Anyway"
+        cancelLabel="Cancel"
+        variant="danger"
+        loading={paying}
+        onConfirm={() => {
+          setFraudWarningOpen(false);
+          void handleConfirmPayment();
+        }}
+        onCancel={() => setFraudWarningOpen(false)}
+      />
     </div>
   );
 };

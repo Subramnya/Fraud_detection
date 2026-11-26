@@ -5,6 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:user": "vite --host 127.0.0.1 --port 5173",
+    "dev:fraudster": "vite --host 127.0.0.1 --port 5174",
+    "dev:banker": "vite --host 127.0.0.1 --port 5175",
+    "dev:cybercell": "vite --host 127.0.0.1 --port 5176",
+    "dev:ai": "vite --host 127.0.0.1 --port 5177",
+    "dev:db": "vite --host 127.0.0.1 --port 5178",
     "build": "tsc && vite build",
     "preview": "vite preview"
   },

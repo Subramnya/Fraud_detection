@@ -78,15 +78,47 @@ python scripts/run_demo.py
 ```
 
 ### 4. Start the FastAPI Server
+
+From the `Fraud_detection` directory:
+
 ```bash
-python -m uvicorn fraudtrace.app.main:app --host 127.0.0.1 --port 8000
+python -m uvicorn fraudtrace.app.main:app --host 0.0.0.0 --port 8000
 ```
 
 - **Swagger UI (Interactive API Docs)**: http://127.0.0.1:8000/docs
 - **Health Check**: http://127.0.0.1:8000/health
 - **System Summary**: http://127.0.0.1:8000/api/system/summary
 
+### 5. Start the Frontend
+
+In a second terminal:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open http://localhost:5173. During local development, Vite forwards `/api` and `/health` requests to `http://127.0.0.1:8000`, so the browser and backend stay connected through the same origin. To use a different backend host, set `VITE_API_PROXY_TARGET` in `frontend/.env`. Set `VITE_API_BASE_URL` only when the browser should call a separately hosted API directly.
+
+For a public port view, forward the frontend port (`5173`) and keep `VITE_API_BASE_URL` blank. Run the backend on the same machine as Vite; Vite then proxies API requests to it. If the backend runs on another machine, set `VITE_API_PROXY_TARGET` to that machine's reachable backend URL and restart Vite.
+
+Public links all use the same forwarded port, so select each portal with the `role` query parameter instead of relying on local ports `5174`–`5178`. Add one of these to the public link:
+
+| Portal | Link suffix |
+|---|---|
+| Customer | `?role=USER` |
+| Fraudster | `?role=FRAUDSTER` |
+| Banker | `?role=BANKER` |
+| Cyber Cell | `?role=CYBERCELL` |
+| AI Model | `?role=AI_MODEL` |
+| Database Viewer | `?role=DB_VIEWER` |
+
+For example, if the forwarded link is `https://your-public-link`, share `https://your-public-link/?role=BANKER` for the Banker portal. The query parameter takes precedence over the local port-based mode selection.
+
 ---
+
+Path-based links also work on that same forwarded port. Use `/customer`, `/fraudster`, `/banker`, `/cybercell`, `/ai-model`, or `/database` after the public link. For example, share `https://your-public-link/banker` to open the Banker portal. Explicit path and `?role=...` links take precedence over local port-based selection.
 
 ## API Endpoints
 

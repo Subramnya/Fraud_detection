@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ArrowLeft, Search, ShieldCheck } from 'lucide-react';
 import type { Account, Transaction } from '../../types';
 import { api } from '../../services/api';
+import { ConfirmDialog } from '../ConfirmDialog';
 
 interface SendMoneyScreenProps {
   senderAccount: Account;
@@ -29,6 +30,9 @@ export const SendMoneyScreen: React.FC<SendMoneyScreenProps> = ({
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
   const [confirmStep, setConfirmStep] = useState(false);
+  const [upiPin, setUpiPin] = useState('');
+  const [pinError, setPinError] = useState<string | null>(null);
+  const [fraudWarningOpen, setFraudWarningOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const candidates = allAccounts.filter(
@@ -252,6 +256,24 @@ export const SendMoneyScreen: React.FC<SendMoneyScreenProps> = ({
             )}
           </div>
 
+          <div>
+            <label className="block text-xs font-semibold text-[#777184] mb-1">
+              Virtual UPI PIN (Demo PIN: 0000)
+            </label>
+            <input
+              type="password"
+              maxLength={4}
+              value={upiPin}
+              onChange={(e) => {
+                setUpiPin(e.target.value);
+                setPinError(null);
+              }}
+              placeholder="Enter 4-digit PIN (0000)"
+              className="w-full px-3.5 py-2.5 rounded-xl border border-purple-200 text-sm tracking-widest focus:outline-none focus:ring-2 focus:ring-[#5B2EFF]"
+            />
+            {pinError && <p className="text-xs text-[#DC2626] mt-1">{pinError}</p>}
+          </div>
+
           <div className="flex gap-3">
             <button
               onClick={() => setConfirmStep(false)}
@@ -261,7 +283,24 @@ export const SendMoneyScreen: React.FC<SendMoneyScreenProps> = ({
               Back
             </button>
             <button
-              onClick={() => void handleConfirm()}
+              onClick={async () => {
+                if (upiPin.trim() !== '0000') {
+                  setPinError('Invalid Virtual UPI PIN. Use 0000 for demo.');
+                  return;
+                }
+                if (selectedRecipient) {
+                  try {
+                    const warn = await api.checkAccountFraudWarning(selectedRecipient.account_id);
+                    if (warn.detected_earlier) {
+                      setFraudWarningOpen(true);
+                      return;
+                    }
+                  } catch {
+                    // continue if check fails
+                  }
+                }
+                void handleConfirm();
+              }}
               disabled={submitting}
               className="flex-1 py-3 rounded-xl bg-[#16A34A] hover:bg-green-700 text-white font-semibold text-sm disabled:opacity-50"
             >
@@ -270,6 +309,21 @@ export const SendMoneyScreen: React.FC<SendMoneyScreenProps> = ({
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={fraudWarningOpen}
+        title="Fraud Warning — Detected Earlier"
+        description="Are you sure? Do you want to really make the payment? Because this person has been detected as a fraud earlier."
+        confirmLabel="Yes, Pay Anyway"
+        cancelLabel="Cancel"
+        variant="danger"
+        loading={submitting}
+        onConfirm={() => {
+          setFraudWarningOpen(false);
+          void handleConfirm();
+        }}
+        onCancel={() => setFraudWarningOpen(false)}
+      />
     </div>
   );
 };

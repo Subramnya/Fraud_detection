@@ -13,6 +13,7 @@ class PaymentRequest(BaseModel):
 
 class TransactionResponse(BaseModel):
     transaction_id: str
+    trace_id: Optional[str] = None
     sender_account_id: str
     receiver_account_id: str
     amount_rupees: float

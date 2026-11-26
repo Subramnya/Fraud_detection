@@ -51,6 +51,23 @@ def create_notification(
     return notif
 
 
+def _should_send_payment_notif(db: Session, account_id: str) -> bool:
+    import json
+    from fraudtrace.app.models.account import Account
+    from fraudtrace.app.models.user import User
+    acc = db.query(Account).filter(Account.account_id == account_id).first()
+    if not acc:
+        return True
+    user = db.query(User).filter(User.user_id == acc.user_id).first()
+    if not user or not getattr(user, "notification_prefs_json", None):
+        return True
+    try:
+        prefs = json.loads(user.notification_prefs_json)
+        return bool(prefs.get("txn_success", True))
+    except Exception:
+        return True
+
+
 def create_payment_notifications(
     db: Session,
     transaction_id: str,
@@ -58,27 +75,29 @@ def create_payment_notifications(
     receiver_account_id: str,
     amount_rupees: float,
 ):
-    """Create payment notifications for sender and receiver."""
-    create_notification(
-        db,
-        recipient_role="CUSTOMER",
-        account_id=sender_account_id,
-        category="PAYMENT",
-        severity="INFO",
-        title="Payment Sent",
-        message=f"Payment successful. ₹{amount_rupees:,.2f} sent to Account {receiver_account_id}.",
-        transaction_id=transaction_id,
-    )
-    create_notification(
-        db,
-        recipient_role="CUSTOMER",
-        account_id=receiver_account_id,
-        category="PAYMENT",
-        severity="INFO",
-        title="Payment Received",
-        message=f"You received ₹{amount_rupees:,.2f} from Account {sender_account_id}.",
-        transaction_id=transaction_id,
-    )
+    """Create payment notifications for sender and receiver respecting notification preferences."""
+    if _should_send_payment_notif(db, sender_account_id):
+        create_notification(
+            db,
+            recipient_role="CUSTOMER",
+            account_id=sender_account_id,
+            category="PAYMENT",
+            severity="INFO",
+            title="Payment Sent",
+            message=f"Payment successful. ₹{amount_rupees:,.2f} sent to Account {receiver_account_id}.",
+            transaction_id=transaction_id,
+        )
+    if _should_send_payment_notif(db, receiver_account_id):
+        create_notification(
+            db,
+            recipient_role="CUSTOMER",
+            account_id=receiver_account_id,
+            category="PAYMENT",
+            severity="INFO",
+            title="Payment Received",
+            message=f"You received ₹{amount_rupees:,.2f} from Account {sender_account_id}.",
+            transaction_id=transaction_id,
+        )
     db.commit()
 
 

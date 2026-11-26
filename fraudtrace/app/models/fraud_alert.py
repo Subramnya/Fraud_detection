@@ -14,6 +14,7 @@ class FraudAlert(Base):
     risk_score = Column(Float, default=0.0)
     severity = Column(String, default="LOW")
     status = Column(String, default="NEW")
+    evidence = Column(Text, nullable=True)  # JSON: supporting txns, timestamps, amounts, explanation
     created_at = Column(DateTime, server_default=func.now())
     account = relationship("Account", backref="fraud_alerts")
     transaction = relationship("Transaction", backref="fraud_alerts")

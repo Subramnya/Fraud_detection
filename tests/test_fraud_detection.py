@@ -6,7 +6,7 @@ def test_high_amount_alert(client, sample_accounts):
     client.post("/api/payments/send", json={
         "sender_account_id": sample_accounts["victim"],
         "receiver_account_id": sample_accounts["A"],
-        "amount_rupees": 10000.0,
+        "amount_rupees": 50000.0,
     })
 
     alerts = client.get(f"/api/fraud/alerts?account_id={sample_accounts['victim']}").json()

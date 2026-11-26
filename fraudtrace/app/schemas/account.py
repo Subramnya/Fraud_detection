@@ -18,6 +18,7 @@ class AccountResponse(BaseModel):
     account_name: str
     balance_rupees: float
     is_active: bool
+    is_frozen: bool = False
     account_type: str
     created_at: Optional[datetime] = None
 

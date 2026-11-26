@@ -1,5 +1,11 @@
 """Application configuration."""
+from pathlib import Path
+
 from pydantic_settings import BaseSettings
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_DATABASE_PATH = PROJECT_ROOT / "data" / "fraudtrace.db"
 
 
 class Settings(BaseSettings):
@@ -7,11 +13,13 @@ class Settings(BaseSettings):
     APP_VERSION: str = "0.1.0"
     APP_ENV: str = "development"
     DEBUG: bool = True
-    DATABASE_URL: str = "sqlite:///./data/fraudtrace.db"
+    # Keep the default database in the project even when uvicorn is started
+    # from a different working directory.
+    DATABASE_URL: str = f"sqlite:///{DEFAULT_DATABASE_PATH.as_posix()}"
     SECRET_KEY: str = "dev-secret-key-change-in-production"
 
     # Fraud detection thresholds
-    HIGH_AMOUNT_THRESHOLD: int = 500000  # in paise (₹5,000)
+    HIGH_AMOUNT_THRESHOLD: int = 5000000  # in paise (₹50,000)
     VELOCITY_WINDOW_SECONDS: int = 300
     VELOCITY_MAX_TRANSACTIONS: int = 5
     FANOUT_WINDOW_SECONDS: int = 3600
@@ -40,7 +48,7 @@ class Settings(BaseSettings):
     PRIORITY_WEIGHT_URGENCY: float = 0.25
 
     class Config:
-        env_file = ".env"
+        env_file = PROJECT_ROOT / ".env"
         extra = "ignore"
 
 

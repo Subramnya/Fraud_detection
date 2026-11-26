@@ -10,10 +10,11 @@ import type {
   Transaction,
 } from '../types';
 
-export const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
+// Use Vite's same-origin proxy by default so public port forwarding works.
+// Set VITE_API_BASE_URL only when the browser should call a separately hosted API.
+export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
 
-const DEFAULT_TIMEOUT_MS = 10000;
+const DEFAULT_TIMEOUT_MS = 25000;
 
 export class ApiError extends Error {
   status: number;
@@ -74,14 +75,12 @@ export function parseFraudTraceQR(raw: string): ParsedQR | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
 
-  // Format 1: FRAUDTRACE:PAY:ACC_XXXXX
   if (trimmed.startsWith('FRAUDTRACE:PAY:')) {
     const accountId = trimmed.replace('FRAUDTRACE:PAY:', '').trim();
     if (!accountId) return null;
     return { scheme: 'FRAUDTRACE', recipient_account_id: accountId };
   }
 
-  // Format 2: JSON payload
   try {
     const parsed = JSON.parse(trimmed);
     if (
@@ -103,11 +102,9 @@ export function parseFraudTraceQR(raw: string): ParsedQR | null {
 }
 
 export const api = {
-  // System
   getHealth: () => request<{ status: string; warning?: string }>('/health'),
   getSystemSummary: () => request<SystemSummary>('/api/system/summary'),
 
-  // Accounts
   listAccounts: () => request<Account[]>('/api/accounts'),
   getAccount: (accountId: string) => request<Account>(`/api/accounts/${accountId}`),
   getBalance: (accountId: string) =>
@@ -119,11 +116,28 @@ export const api = {
     email: string;
     phone?: string;
     initial_balance_rupees: number;
+    account_type?: 'NORMAL' | 'FRAUDSTER';
   }) =>
     request<Account>('/api/accounts/register', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  updateAccountRole: (accountId: string, account_type: 'NORMAL' | 'FRAUDSTER') =>
+    request<{ account_id: string; account_type: string }>(`/api/accounts/${accountId}/role`, {
+      method: 'PATCH',
+      body: JSON.stringify({ account_type }),
+    }),
+  deleteAccount: (accountId: string) =>
+    request<{ deleted: boolean; account_id: string }>(`/api/accounts/${accountId}`, {
+      method: 'DELETE',
+    }),
+  checkAccountFraudWarning: (accountId: string) =>
+    request<{
+      account_id: string;
+      detected_earlier: boolean;
+      alert_count: number;
+      case_count: number;
+    }>(`/api/accounts/${accountId}/fraud-warning`),
   topupVirtualMoney: (accountId: string, amount_rupees: number) =>
     request<{ account_id: string; added_rupees: number; balance_rupees: number; simulated: boolean }>(
       `/api/accounts/${accountId}/topup`,
@@ -133,7 +147,6 @@ export const api = {
       }
     ),
 
-  // Payments
   sendPayment: (payload: {
     sender_account_id: string;
     receiver_account_id: string;
@@ -151,7 +164,6 @@ export const api = {
         : '/api/payments/history'
     ),
 
-  // Fraud & Cases
   reportFraud: (payload: {
     reporting_account_id: string;
     transaction_id: string;
@@ -189,7 +201,6 @@ export const api = {
       `/api/graph/case/${caseId}`
     ),
 
-  // Freeze Requests
   listFreezeRequests: (caseId?: string) =>
     request<FreezeRequest[]>(
       caseId
@@ -219,7 +230,6 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  // Notifications
   listNotifications: (role: 'CUSTOMER' | 'BANKER', accountId?: string) => {
     const params = new URLSearchParams({ role });
     if (role === 'CUSTOMER' && accountId) params.set('account_id', accountId);
@@ -241,22 +251,367 @@ export const api = {
     );
   },
 
-  // Demo Simulation
-  triggerSuspiciousDemo: (accountId: string) =>
+  getSamSimulationAccount: () =>
     request<{
-      simulated: boolean;
-      transaction_id: string;
-      sender_account_id: string;
-      receiver_account_id: string;
-      amount_rupees: number;
+      account_id: string;
+      user_id: string;
+      username: string;
+      display_name: string;
+      account_name: string;
+      account_type: string;
+      label: string;
+      balance_rupees: number;
+      is_active: boolean;
+    }>('/api/simulation/sam'),
+
+  runSamScenario: (
+    scenario:
+      | 'FAN_IN'
+      | 'FAN_OUT'
+      | 'HIGH_VELOCITY'
+      | 'TRANSACTION_SPLITTING'
+      | 'RAPID_PASSTHROUGH'
+  ) =>
+    request<{
+      scenario: string;
+      label: string;
+      sam_account_id: string;
+      sam_balance_rupees: number;
+      transactions: Transaction[];
+      alerts_detected: Array<{
+        alert_id: string;
+        account_id: string;
+        transaction_id: string;
+        rule_triggered: string;
+        severity: string;
+        risk_score: number;
+        reason: string;
+      }>;
+      detection_note?: string | null;
+    }>('/api/simulation/sam/scenario', {
+      method: 'POST',
+      body: JSON.stringify({ scenario }),
+    }),
+
+  listFraudsterPartners: () =>
+    request<Array<{ account_id: string; name: string; balance_rupees: number; is_frozen: boolean }>>(
+      '/api/fraudster/partners'
+    ),
+  getFraudsterIncoming: () =>
+    request<
+      Array<{
+        transaction_id: string;
+        sender_account_id: string;
+        sender_name: string;
+        receiver_account_id: string;
+        receiver_name: string;
+        amount_rupees: number;
+        created_at: string;
+      }>
+    >('/api/fraudster/incoming'),
+  executeFraudAttack: (payload: {
+    target_account_id: string;
+    fraud_type: string;
+    amount_rupees: number;
+  }) =>
+    request<{
+      fraud_type: string;
+      target_account_id: string;
+      transactions: Transaction[];
       alerts_triggered: Array<{
         alert_id: string;
         rule_triggered: string;
         severity: string;
+        risk_score: number;
         reason: string;
       }>;
-    }>('/api/demo/trigger-suspicious', {
+      graph: {
+        nodes: Array<Record<string, unknown>>;
+        edges: Array<Record<string, unknown>>;
+        final_destination_accounts?: string[];
+      };
+    }>('/api/fraudster/attack', {
       method: 'POST',
-      body: JSON.stringify({ account_id: accountId }),
+      body: JSON.stringify(payload),
+    }),
+
+  getBankerAccounts: () =>
+    request<
+      Array<{
+        account_id: string;
+        account_name: string;
+        balance_rupees: number;
+        is_active: boolean;
+        is_frozen: boolean;
+        account_type: string;
+        open_alerts: number;
+        latest_transaction: {
+          transaction_id: string;
+          trace_id?: string;
+          type: 'CREDIT' | 'DEBIT';
+          amount_rupees: number;
+          timestamp: string;
+          peer_account_id: string;
+        } | null;
+      }>
+    >('/api/banker/accounts'),
+  adjustBankerAccount: (accountId: string, action: 'ADD' | 'DEDUCT', amount_rupees: number) =>
+    request<{ account_id: string; balance_rupees: number }>(
+      `/api/banker/accounts/${accountId}/adjust`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ action, amount_rupees }),
+      }
+    ),
+  freezeBankerAccount: (accountId: string, reason?: string) =>
+    request<{ account_id: string; is_frozen: boolean; case_id?: string; report?: unknown }>(
+      `/api/banker/accounts/${accountId}/freeze`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ reason: reason || 'Frozen by Banker due to suspicious activity' }),
+      }
+    ),
+  getBankerPrioritizedAlerts: () =>
+    request<
+      Array<{
+        account_id: string;
+        account_name: string;
+        is_frozen: boolean;
+        alert_id: string;
+        transaction_id?: string | null;
+        amount_rupees: number;
+        risk_score: number;
+        risk_category: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | string;
+        primary_reason: string;
+        status: string;
+        last_activity_at?: string | null;
+        risk_assessment: {
+          assessment_id: string;
+          overall_score: number;
+          risk_category: string;
+          factors: Array<{
+            factor: string;
+            score: number;
+            weight: number;
+            contribution: number;
+            max_contribution: number;
+          }>;
+          observations: string[];
+          explanation: string;
+          model_version: string;
+          created_at?: string | null;
+        };
+        supporting_alerts: Array<{
+          alert_id: string;
+          transaction_id?: string | null;
+          rule_triggered: string;
+          severity: string;
+          reason: string;
+          created_at?: string | null;
+        }>;
+      }>
+    >('/api/banker/alerts/prioritized'),
+
+  submitToCyberCell: (payload: {
+    account_id: string;
+    case_id?: string;
+    submitted_by: string;
+    fraud_type: string;
+    summary: string;
+  }) =>
+    request<{ report_id: string; status: string }>('/api/cybercell/report', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  listCyberCellReports: () =>
+    request<
+      Array<{
+        report_id: string;
+        case_id?: string;
+        account_id: string;
+        submitted_by: string;
+        fraud_type: string;
+        summary: string;
+        report_payload?: Record<string, unknown> | null;
+        status: string;
+        created_at: string;
+      }>
+    >('/api/cybercell/reports'),
+  updateCyberCellStatus: (reportId: string, status: 'PENDING' | 'INVESTIGATING' | 'RESOLVED') =>
+    request<{ report_id: string; status: string }>(`/api/cybercell/reports/${reportId}/status`, {
+      method: 'POST',
+      body: JSON.stringify({ status }),
+    }),
+  getCyberCellReportGraph: (reportId: string) =>
+    request<{
+      available?: boolean;
+      nodes: Array<Record<string, unknown>>;
+      edges: Array<Record<string, unknown>>;
+      final_destination_accounts?: string[];
+    }>(`/api/cybercell/reports/${reportId}/graph`),
+
+  getAiLiveFeed: () =>
+    request<{
+      fraud_detected: boolean;
+      alerts: Array<{
+        alert_id: string;
+        account_id: string;
+        account_name: string;
+        is_frozen: boolean;
+        transaction_id: string;
+        rule_triggered: string;
+        severity: string;
+        risk_score: number;
+        reason: string;
+        status: string;
+        created_at: string;
+      }>;
+      tracked_transactions: Array<{
+        transaction_id: string;
+        trace_id?: string;
+        sender_account_id: string;
+        receiver_account_id: string;
+        amount_rupees: number;
+        created_at: string;
+      }>;
+      graph: {
+        nodes: Array<Record<string, unknown>>;
+        edges: Array<Record<string, unknown>>;
+        final_destination_accounts?: string[];
+      };
+      model_info: string;
+    }>('/api/ai/live'),
+
+  getDbLive: () =>
+    request<{
+      counts: Record<string, number>;
+      accounts: Array<Record<string, unknown>>;
+      transactions: Array<Record<string, unknown>>;
+      alerts: Array<Record<string, unknown>>;
+      cli_logs: string[];
+      cybercell_reports: Array<Record<string, unknown>>;
+    }>('/api/db/live'),
+
+  // Realistic Banking Profile APIs
+  getUserProfile: (accountId: string) =>
+    request<{
+      personal: {
+        user_id: string;
+        full_name: string;
+        email: string;
+        phone: string;
+        date_of_birth: string;
+        address: string;
+      };
+      bank_account: {
+        account_id: string;
+        masked_account_number: string;
+        account_holder_name: string;
+        account_type: string;
+        bank_name: string;
+        branch_name: string;
+        ifsc_code: string;
+        opened_at: string;
+        status: string;
+      };
+      kyc: {
+        overall_status: string;
+        mobile_verified: boolean;
+        email_verified: boolean;
+        verified_at: string;
+      };
+      security: {
+        password_configured: boolean;
+        two_factor_enabled: boolean;
+        two_factor_status: string;
+        last_successful_login: string;
+        recent_logins: Array<{
+          activity_id: string;
+          status: string;
+          device_info: string;
+          ip_address: string;
+          timestamp: string;
+        }>;
+      };
+      notification_preferences: {
+        txn_success: boolean;
+        txn_failed: boolean;
+        suspicious_txn: boolean;
+        fraud_updates: boolean;
+        login_alerts: boolean;
+        email_notifications: boolean;
+        sms_notifications: boolean;
+      };
+      privacy: {
+        privacy_consent: boolean;
+        data_sharing_opt_in: boolean;
+      };
+    }>(`/api/profile/${accountId}`),
+
+  updatePersonalProfile: (
+    accountId: string,
+    payload: { full_name: string; phone?: string; date_of_birth?: string; address?: string }
+  ) =>
+    request<{ updated: boolean; full_name: string }>(`/api/profile/${accountId}/personal`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+
+  verifyKyc: (accountId: string, payload: { verify_mobile?: boolean; verify_email?: boolean }) =>
+    request<{ kyc_status: string; mobile_verified: boolean; email_verified: boolean }>(
+      `/api/profile/${accountId}/kyc/verify`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    ),
+
+  changePassword: (
+    accountId: string,
+    payload: { current_password?: string; new_password: string }
+  ) =>
+    request<{ updated: boolean }>(`/api/profile/${accountId}/password`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  recordLoginEvent: (accountId: string) =>
+    request<{ recorded: boolean; activity_id: string }>(`/api/profile/${accountId}/login-event`, {
+      method: 'POST',
+    }),
+
+  updateNotificationPreferences: (
+    accountId: string,
+    payload: {
+      txn_success: boolean;
+      txn_failed: boolean;
+      suspicious_txn: boolean;
+      fraud_updates: boolean;
+      login_alerts: boolean;
+      email_notifications: boolean;
+      sms_notifications: boolean;
+    }
+  ) =>
+    request<Record<string, boolean>>(`/api/profile/${accountId}/preferences`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+
+  updatePrivacySettings: (
+    accountId: string,
+    payload: { privacy_consent: boolean; data_sharing_opt_in: boolean }
+  ) =>
+    request<{ privacy_consent: boolean; data_sharing_opt_in: boolean }>(
+      `/api/profile/${accountId}/privacy`,
+      {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }
+    ),
+
+  submitSupportTicket: (accountId: string, payload: { subject: string; message: string }) =>
+    request<{ ticket_id: string; status: string }>(`/api/profile/${accountId}/support`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
     }),
 };

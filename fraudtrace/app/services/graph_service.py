@@ -7,9 +7,9 @@ from fraudtrace.app.models.fraud_case import FraudCase
 from fraudtrace.app.utils.helpers import paise_to_rupees
 
 
-def build_transaction_graph(db: Session, transactions: list = None) -> nx.DiGraph:
-    """Build a directed transaction graph from database records."""
-    G = nx.DiGraph()
+def build_transaction_graph(db: Session, transactions: list = None) -> nx.MultiDiGraph:
+    """Build a directed transaction graph from database records with trace metadata."""
+    G = nx.MultiDiGraph()
 
     if transactions is None:
         transactions = db.query(Transaction).filter(
@@ -17,20 +17,40 @@ def build_transaction_graph(db: Session, transactions: list = None) -> nx.DiGrap
         ).all()
 
     for txn in transactions:
-        # Add nodes
         if not G.has_node(txn.sender_account_id):
             G.add_node(txn.sender_account_id, type="account")
         if not G.has_node(txn.receiver_account_id):
             G.add_node(txn.receiver_account_id, type="account")
 
-        # Add edge (may be multi-edge scenario, use transaction_id as key)
+        # Attach source trace_ids & origin_transaction_ids from allocations
+        txn_allocs = (
+            db.query(TransactionAllocation)
+            .filter(TransactionAllocation.transaction_id == txn.transaction_id)
+            .all()
+        )
+        trace_ids = []
+        origin_txn_ids = []
+        for ta in txn_allocs:
+            dest_alloc = db.query(FundAllocation).filter(
+                FundAllocation.allocation_id == ta.destination_allocation_id
+            ).first()
+            if dest_alloc:
+                if dest_alloc.trace_id and dest_alloc.trace_id not in trace_ids:
+                    trace_ids.append(dest_alloc.trace_id)
+                if dest_alloc.origin_transaction_id not in origin_txn_ids:
+                    origin_txn_ids.append(dest_alloc.origin_transaction_id)
+
         G.add_edge(
             txn.sender_account_id,
             txn.receiver_account_id,
+            key=txn.transaction_id,
             transaction_id=txn.transaction_id,
             amount_paise=txn.amount_paise,
             amount_rupees=paise_to_rupees(txn.amount_paise),
             timestamp=str(txn.created_at) if txn.created_at else None,
+            trace_ids=trace_ids,
+            trace_id=trace_ids[0] if trace_ids else None,
+            origin_transaction_ids=origin_txn_ids,
             status=txn.status,
         )
 
@@ -230,13 +250,16 @@ def fanout_analysis(db: Session, account_id: str) -> dict:
     }
 
 
-def _graph_to_json(G: nx.DiGraph) -> dict:
+def _graph_to_json(G: nx.MultiDiGraph) -> dict:
     """Convert NetworkX graph to JSON-serializable format."""
     nodes = []
+    final_destinations = []
     for node_id, attrs in G.nodes(data=True):
-        node_data = {"id": node_id}
+        node_data = {"id": node_id, "out_degree": G.out_degree(node_id), "in_degree": G.in_degree(node_id)}
         node_data.update(attrs)
         nodes.append(node_data)
+        if G.in_degree(node_id) > 0 and G.out_degree(node_id) == 0:
+            final_destinations.append(node_id)
 
     edges = []
     for u, v, attrs in G.edges(data=True):
@@ -244,4 +267,8 @@ def _graph_to_json(G: nx.DiGraph) -> dict:
         edge_data.update(attrs)
         edges.append(edge_data)
 
-    return {"nodes": nodes, "edges": edges}
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "final_destination_accounts": final_destinations,
+    }

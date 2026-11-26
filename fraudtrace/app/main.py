@@ -1,18 +1,17 @@
-"""FraudTrace - Graph-Based Fraud Detection Platform.
+"""FraudTrace - Unified Core Backend.
 
-⚠️ WARNING: This is a SYNTHETIC PROTOTYPE for demonstration purposes only.
-   Not connected to real payment systems or bank accounts.
-   All transactions, accounts, and data are simulated.
+⚠️ SYNTHETIC PROTOTYPE - Not connected to real payment systems.
 """
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from sqlalchemy import text
 from fraudtrace.app.core.config import settings
 from fraudtrace.app.core.database import init_db, SessionLocal
 from fraudtrace.app.api import (
-    accounts, payments, fraud, investigation, graph, freeze, reports, notifications,
+    accounts, payments, fraud, investigation, graph, freeze, reports,
+    notifications, simulation, banker, cybercell, fraudster, profile,
 )
+from fraudtrace.app.services.ai_model_service import get_ai_live_feed
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -23,7 +22,6 @@ app = FastAPI(
     ),
 )
 
-# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -32,7 +30,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers
 app.include_router(accounts.router)
 app.include_router(payments.router)
 app.include_router(fraud.router)
@@ -41,6 +38,11 @@ app.include_router(graph.router)
 app.include_router(freeze.router)
 app.include_router(reports.router)
 app.include_router(notifications.router)
+app.include_router(simulation.router)
+app.include_router(banker.router)
+app.include_router(cybercell.router)
+app.include_router(fraudster.router)
+app.include_router(profile.router)
 
 
 @app.on_event("startup")
@@ -104,76 +106,80 @@ def system_summary():
     }
 
 
-class DemoSuspiciousRequest(BaseModel):
-    account_id: str
+@app.get("/api/ai/live", tags=["AI Model"])
+def ai_live_feed():
+    db = SessionLocal()
+    try:
+        return get_ai_live_feed(db)
+    finally:
+        db.close()
 
 
-@app.post("/api/demo/trigger-suspicious", tags=["Demo Simulation"])
-def trigger_suspicious_demo(request: DemoSuspiciousRequest):
-    """Development-only endpoint to trigger a predefined suspicious transfer scenario."""
+@app.get("/api/db/live", tags=["Database Viewer"])
+def db_live_snapshot():
+    """Live database snapshot & audit CLI stream for the Database Viewer frontend."""
     from fraudtrace.app.models.account import Account
-    from fraudtrace.app.services.payment_service import process_payment
-    from fraudtrace.app.services.fraud_detection_service import monitor_transaction
-    from fraudtrace.app.services.notification_service import create_payment_notifications
+    from fraudtrace.app.models.transaction import Transaction
+    from fraudtrace.app.models.fraud_alert import FraudAlert
+    from fraudtrace.app.models.audit_log import AuditLog
+    from fraudtrace.app.models.cybercell_report import CyberCellReport
+    from fraudtrace.app.utils.helpers import paise_to_rupees
 
     db = SessionLocal()
     try:
-        target = db.query(Account).filter(Account.account_id == request.account_id).first()
-        if not target:
-            raise HTTPException(status_code=404, detail=f"Account {request.account_id} not found")
+        accs = db.query(Account).order_by(Account.created_at.desc()).limit(100).all()
+        txns = db.query(Transaction).order_by(Transaction.created_at.desc()).limit(30).all()
+        alerts = db.query(FraudAlert).order_by(FraudAlert.created_at.desc()).limit(25).all()
+        logs = db.query(AuditLog).order_by(AuditLog.created_at.desc()).limit(40).all()
+        cyber = db.query(CyberCellReport).order_by(CyberCellReport.created_at.desc()).limit(20).all()
 
-        receiver = (
-            db.query(Account)
-            .filter(Account.account_id != request.account_id, Account.is_active == True)
-            .first()
-        )
-        if not receiver:
-            raise HTTPException(status_code=400, detail="No other active account available for demo")
-
-        # Ensure target has enough balance for the ₹12,500 high-amount demo transfer
-        demo_amount = 12500.0
-        if target.balance_paise < int(demo_amount * 100):
-            target.balance_paise += int(demo_amount * 100)
-            from fraudtrace.app.models.allocation import FundAllocation
-            from fraudtrace.app.utils.identifiers import generate_allocation_id
-            db.add(FundAllocation(
-                allocation_id=generate_allocation_id(),
-                account_id=target.account_id,
-                origin_transaction_id="DEMO_SIMULATION_SEED",
-                amount_paise=int(demo_amount * 100),
-                is_active=True,
-            ))
-            db.commit()
-
-        txn = process_payment(
-            db,
-            sender_account_id=target.account_id,
-            receiver_account_id=receiver.account_id,
-            amount_rupees=demo_amount,
-            description="SIMULATED: High-value suspicious transfer demo",
-        )
-        create_payment_notifications(
-            db,
-            transaction_id=txn["transaction_id"],
-            sender_account_id=target.account_id,
-            receiver_account_id=receiver.account_id,
-            amount_rupees=demo_amount,
-        )
-        alerts = monitor_transaction(db, txn["transaction_id"])
         return {
-            "simulated": True,
-            "transaction_id": txn["transaction_id"],
-            "sender_account_id": target.account_id,
-            "receiver_account_id": receiver.account_id,
-            "amount_rupees": demo_amount,
-            "alerts_triggered": [
+            "counts": {
+                "accounts": db.query(Account).count(),
+                "transactions": db.query(Transaction).count(),
+                "fraud_alerts": db.query(FraudAlert).count(),
+                "audit_logs": db.query(AuditLog).count(),
+                "cybercell_reports": db.query(CyberCellReport).count(),
+            },
+            "accounts": [
                 {
-                    "alert_id": a.alert_id,
-                    "rule_triggered": a.rule_triggered,
-                    "severity": a.severity,
-                    "reason": a.reason,
+                    "account_id": a.account_id,
+                    "account_name": a.account_name,
+                    "balance_rupees": paise_to_rupees(a.balance_paise),
+                    "is_frozen": bool(getattr(a, "is_frozen", False)),
+                    "account_type": a.account_type,
                 }
-                for a in alerts
+                for a in accs
+            ],
+            "transactions": [
+                {
+                    "transaction_id": t.transaction_id,
+                    "trace_id": t.trace_id,
+                    "sender_account_id": t.sender_account_id,
+                    "receiver_account_id": t.receiver_account_id,
+                    "amount_rupees": paise_to_rupees(t.amount_paise),
+                    "created_at": str(t.created_at) if t.created_at else None,
+                }
+                for t in txns
+            ],
+            "alerts": [
+                {
+                    "alert_id": al.alert_id,
+                    "account_id": al.account_id,
+                    "rule_triggered": al.rule_triggered,
+                    "severity": al.severity,
+                    "risk_score": al.risk_score,
+                    "status": al.status,
+                }
+                for al in alerts
+            ],
+            "cli_logs": [
+                f"[{l.created_at}] {l.entity_type}:{l.entity_id} {l.action} by {l.actor} -> {l.details or ''}"
+                for l in logs
+            ],
+            "cybercell_reports": [
+                {"report_id": c.report_id, "account_id": c.account_id, "status": c.status}
+                for c in cyber
             ],
         }
     finally:

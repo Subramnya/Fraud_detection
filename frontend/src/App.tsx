@@ -3,12 +3,7 @@ import type {
   Account,
   AppMode,
   AppNotification,
-  BankerTab,
   CustomerTab,
-  FraudAlert,
-  FraudCase,
-  FreezeRequest,
-  SystemSummary,
   Transaction,
 } from './types';
 import { api } from './services/api';
@@ -25,12 +20,65 @@ import { HistoryScreen } from './components/customer/HistoryScreen';
 import { NotificationsScreen } from './components/customer/NotificationsScreen';
 import { ReportFraudScreen } from './components/customer/ReportFraudScreen';
 import { ProfileScreen } from './components/customer/ProfileScreen';
-import { BankerDashboard } from './components/banker/BankerDashboard';
+import { FraudsterApp } from './components/fraudster/FraudsterApp';
+import { BankerApp } from './components/banker/BankerApp';
+import { CyberCellApp } from './components/cybercell/CyberCellApp';
+import { AiModelApp } from './components/ai/AiModelApp';
+import { DbViewerApp } from './components/db/DbViewerApp';
+
+const PATH_ROLES: Record<string, AppMode> = {
+  '/customer': 'USER',
+  '/user': 'USER',
+  '/fraudster': 'FRAUDSTER',
+  '/banker': 'BANKER',
+  '/cybercell': 'CYBERCELL',
+  '/ai-model': 'AI_MODEL',
+  '/database': 'DB_VIEWER',
+  '/db': 'DB_VIEWER',
+};
+
+function resolveAppMode(): AppMode {
+  const params = new URLSearchParams(window.location.search);
+  const qRole = params.get('role')?.toUpperCase();
+  if (qRole === 'FRAUDSTER' || qRole === 'BANKER' || qRole === 'CYBERCELL' || qRole === 'AI_MODEL' || qRole === 'DB_VIEWER' || qRole === 'USER') {
+    return qRole;
+  }
+
+  const path = window.location.pathname.replace(/\/+$/, '').toLowerCase() || '/';
+  const pathRole = PATH_ROLES[path];
+  if (pathRole) return pathRole;
+
+  const envRole = (import.meta.env.VITE_APP_ROLE || '').toUpperCase();
+  if (envRole) return envRole as AppMode;
+
+  const port = window.location.port;
+  if (port === '5174') return 'FRAUDSTER';
+  if (port === '5175') return 'BANKER';
+  if (port === '5176') return 'CYBERCELL';
+  if (port === '5177') return 'AI_MODEL';
+  if (port === '5178') return 'DB_VIEWER';
+  return 'USER';
+}
 
 export function App() {
-  const [mode, setMode] = useState<AppMode>('CUSTOMER');
-  const [customerTab, setCustomerTab] = useState<CustomerTab>('home');
-  const [bankerTab, setBankerTab] = useState<BankerTab>('dashboard');
+  const mode = resolveAppMode();
+
+  if (mode === 'FRAUDSTER') return <FraudsterApp />;
+  if (mode === 'BANKER') return <BankerApp />;
+  if (mode === 'CYBERCELL') return <CyberCellApp />;
+  if (mode === 'AI_MODEL') return <AiModelApp />;
+  if (mode === 'DB_VIEWER') return <DbViewerApp />;
+
+  return <UserUPayApp />;
+}
+
+function UserUPayApp() {
+  const [customerTab, setCustomerTab] = useState<CustomerTab>(
+    () => (localStorage.getItem('ft_user_tab') as CustomerTab) || 'home'
+  );
+  const [savedAccountId, setSavedAccountId] = useState<string | null>(
+    () => localStorage.getItem('ft_user_account_id')
+  );
 
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [accountsLoading, setAccountsLoading] = useState(true);
@@ -47,21 +95,19 @@ export function App() {
     errorMessage?: string | null;
   } | null>(null);
 
-  // Notifications
   const [customerNotifs, setCustomerNotifs] = useState<AppNotification[]>([]);
   const [customerUnread, setCustomerUnread] = useState(0);
-  const [bankerNotifs, setBankerNotifs] = useState<AppNotification[]>([]);
-  const [bankerUnread, setBankerUnread] = useState(0);
   const seenNotifIds = useRef<Set<string>>(new Set());
-
-  // Banker state
-  const [summary, setSummary] = useState<SystemSummary | null>(null);
-  const [alerts, setAlerts] = useState<FraudAlert[]>([]);
-  const [cases, setCases] = useState<FraudCase[]>([]);
-  const [freezeRequests, setFreezeRequests] = useState<FreezeRequest[]>([]);
-
-  // Toasts
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+
+  useEffect(() => {
+    localStorage.setItem('ft_user_tab', customerTab);
+  }, [customerTab]);
+
+  useEffect(() => {
+    if (savedAccountId) localStorage.setItem('ft_user_account_id', savedAccountId);
+    else localStorage.removeItem('ft_user_account_id');
+  }, [savedAccountId]);
 
   const pushToast = useCallback(
     (type: ToastItem['type'], title: string, message: string) => {
@@ -79,76 +125,56 @@ export function App() {
     setAccountsError(null);
     try {
       const list = await api.listAccounts();
-      setAccounts(list);
-      setActiveAccount((prev) => {
-        if (!prev) return null;
-        return list.find((a) => a.account_id === prev.account_id) || prev;
-      });
+      const userVisible = list.filter((a) => a.account_type !== 'FRAUDSTER_PARTNER');
+      setAccounts(userVisible);
+      if (savedAccountId) {
+        const match = userVisible.find((a) => a.account_id === savedAccountId);
+        if (match) setActiveAccount(match);
+      }
     } catch (err) {
-      setAccountsError(
-        err instanceof Error ? err.message : 'Unable to load accounts'
-      );
+      setAccountsError(err instanceof Error ? err.message : 'Unable to load accounts');
     } finally {
       setAccountsLoading(false);
     }
-  }, []);
+  }, [savedAccountId]);
 
-  const loadCustomerData = useCallback(async (accId: string) => {
-    try {
-      const [acc, hist, notifs] = await Promise.all([
-        api.getAccount(accId),
-        api.getPaymentHistory(accId),
-        api.listNotifications('CUSTOMER', accId),
-      ]);
-      setActiveAccount(acc);
-      setTransactions(hist.transactions);
-      setCustomerNotifs(notifs.notifications);
-      setCustomerUnread(notifs.unread_count);
+  const loadCustomerData = useCallback(
+    async (accId: string) => {
+      try {
+        const [acc, hist, notifs] = await Promise.all([
+          api.getAccount(accId),
+          api.getPaymentHistory(accId),
+          api.listNotifications('CUSTOMER', accId),
+        ]);
+        setActiveAccount(acc);
+        setTransactions(hist.transactions);
+        setCustomerNotifs(notifs.notifications);
+        setCustomerUnread(notifs.unread_count);
 
-      // Show toast for newly arrived unread security/fraud alerts
-      for (const n of notifs.notifications) {
-        if (!n.is_read && !seenNotifIds.current.has(n.notification_id)) {
-          seenNotifIds.current.add(n.notification_id);
-          if (n.category === 'FRAUD_ALERT' || n.category === 'SECURITY') {
-            pushToast(
-              n.severity === 'HIGH' || n.severity === 'CRITICAL' ? 'error' : 'warning',
-              n.title,
-              n.message
-            );
+        for (const n of notifs.notifications) {
+          if (!n.is_read && !seenNotifIds.current.has(n.notification_id)) {
+            seenNotifIds.current.add(n.notification_id);
+            if (n.category === 'FRAUD_ALERT' || n.category === 'SECURITY') {
+              pushToast(
+                n.severity === 'HIGH' || n.severity === 'CRITICAL' ? 'error' : 'warning',
+                n.title,
+                n.message
+              );
+            }
+          } else {
+            seenNotifIds.current.add(n.notification_id);
           }
-        } else {
-          seenNotifIds.current.add(n.notification_id);
         }
+      } catch {
+        // silent during background poll
       }
-    } catch {
-      // silent during background poll
-    }
-  }, [pushToast]);
-
-  const loadBankerData = useCallback(async () => {
-    try {
-      const [sum, al, cs, fr, notifs] = await Promise.all([
-        api.getSystemSummary(),
-        api.listAlerts(),
-        api.listCases(),
-        api.listFreezeRequests(),
-        api.listNotifications('BANKER'),
-      ]);
-      setSummary(sum);
-      setAlerts(al);
-      setCases(cs);
-      setFreezeRequests(fr);
-      setBankerNotifs(notifs.notifications);
-      setBankerUnread(notifs.unread_count);
-    } catch {
-      // silent during background poll
-    }
-  }, []);
+    },
+    [pushToast]
+  );
 
   useEffect(() => {
     void loadAccounts();
-    void loadBankerData();
-  }, [loadAccounts, loadBankerData]);
+  }, [loadAccounts]);
 
   useEffect(() => {
     if (activeAccount) {
@@ -156,58 +182,88 @@ export function App() {
     }
   }, [activeAccount?.account_id, loadCustomerData]);
 
-  // Real-time polling every 4 seconds
   useEffect(() => {
     const timer = setInterval(() => {
       if (activeAccount) {
         void loadCustomerData(activeAccount.account_id);
       }
-      void loadBankerData();
-    }, 4000);
+    }, 3500);
     return () => clearInterval(timer);
-  }, [activeAccount, loadCustomerData, loadBankerData]);
+  }, [activeAccount, loadCustomerData]);
 
   const refreshAll = () => {
     void loadAccounts();
     if (activeAccount) void loadCustomerData(activeAccount.account_id);
-    void loadBankerData();
+  };
+
+  const handleUserFreezeRequest = async () => {
+    if (!activeAccount) return;
+    try {
+      const latestTxn = transactions[0];
+      if (!latestTxn) {
+        pushToast('warning', 'No Transaction', 'No recent transaction found to attach freeze.');
+        return;
+      }
+      const c = await api.reportFraud({
+        reporting_account_id: activeAccount.account_id,
+        transaction_id: latestTxn.transaction_id,
+        fraud_category: 'UNAUTHORIZED_DEBIT',
+        description: 'User clicked Freeze Account after Red Alert',
+      });
+      await api.createFreezeRequest({
+        case_id: c.case_id,
+        account_id: activeAccount.account_id,
+        reason: 'Urgent user freeze request triggered from Red Alert',
+      });
+      pushToast(
+        'success',
+        'Freeze Request Sent to Banker',
+        `Case ${c.case_id} & freeze request dispatched to Banker Desk.`
+      );
+      refreshAll();
+    } catch (err) {
+      pushToast('error', 'Freeze Request Failed', err instanceof Error ? err.message : 'Error');
+    }
+  };
+
+  const handleReportToCyberCell = async (n: AppNotification) => {
+    if (!activeAccount) return;
+    try {
+      const res = await api.submitToCyberCell({
+        account_id: activeAccount.account_id,
+        case_id: n.case_id || undefined,
+        submitted_by: activeAccount.account_name,
+        fraud_type: 'UNAUTHORIZED_ACCESS',
+        summary: n.message,
+      });
+      await api.markNotificationRead(n.notification_id);
+      pushToast(
+        'success',
+        'Reported to Cyber Cell',
+        `Report ${res.report_id} forwarded to Cyber Cell Portal.`
+      );
+      refreshAll();
+    } catch (err) {
+      pushToast('error', 'Cyber Cell Error', err instanceof Error ? err.message : 'Error');
+    }
   };
 
   return (
-    <div className="min-h-screen bg-[#F4F0FF] text-[#201A32]">
+    <div className="min-h-screen bg-[#FBF8F3] text-gray-900">
       <ToastContainer
         toasts={toasts}
         onDismiss={(id) => setToasts((prev) => prev.filter((t) => t.id !== id))}
       />
 
       <Header
-        mode={mode}
-        onModeChange={(m) => setMode(m)}
+        mode="USER"
         userName={activeAccount?.account_name}
-        unreadCount={mode === 'CUSTOMER' ? customerUnread : bankerUnread}
-        onBellClick={() => {
-          if (mode === 'CUSTOMER') setCustomerTab('notifications');
-          else setBankerTab('notifications');
-        }}
-        onProfileClick={
-          activeAccount ? () => setCustomerTab('profile') : undefined
-        }
+        unreadCount={customerUnread}
+        onBellClick={() => setCustomerTab('notifications')}
+        onProfileClick={activeAccount ? () => setCustomerTab('profile') : undefined}
       />
 
-      {mode === 'BANKER' ? (
-        <BankerDashboard
-          activeTab={bankerTab}
-          onTabChange={setBankerTab}
-          summary={summary}
-          alerts={alerts}
-          cases={cases}
-          freezeRequests={freezeRequests}
-          notifications={bankerNotifs}
-          unreadCount={bankerUnread}
-          onRefreshAll={refreshAll}
-          onNotify={(type, title, msg) => pushToast(type, title, msg)}
-        />
-      ) : !activeAccount ? (
+      {!activeAccount ? (
         <DemoLoginScreen
           accounts={accounts}
           loading={accountsLoading}
@@ -215,8 +271,10 @@ export function App() {
           onRefresh={() => void loadAccounts()}
           onSelectAccount={(acc) => {
             seenNotifIds.current.clear();
+            setSavedAccountId(acc.account_id);
             setActiveAccount(acc);
             setCustomerTab('home');
+            void api.recordLoginEvent(acc.account_id).catch(() => undefined);
           }}
         />
       ) : (
@@ -226,6 +284,7 @@ export function App() {
               account={activeAccount}
               allAccounts={accounts}
               transactions={transactions}
+              notifications={customerNotifs}
               onNavigate={(tab) => {
                 setSelectedRecipient(null);
                 setCustomerTab(tab);
@@ -235,6 +294,7 @@ export function App() {
                 setCustomerTab('send');
               }}
               onBalanceUpdated={refreshAll}
+              onFreezeAccount={() => void handleUserFreezeRequest()}
               onNotify={(type, title, msg) => pushToast(type, title, msg)}
             />
           )}
@@ -274,12 +334,12 @@ export function App() {
             />
           )}
 
-          {customerTab === 'receipt' && paymentResult && (
+          {customerTab === 'receipt' && (
             <PaymentResultScreen
-              success={paymentResult.success}
-              transaction={paymentResult.transaction}
-              recipientName={paymentResult.recipientName}
-              errorMessage={paymentResult.errorMessage}
+              success={Boolean(paymentResult?.success)}
+              transaction={paymentResult?.transaction}
+              recipientName={paymentResult?.recipientName}
+              errorMessage={paymentResult?.errorMessage}
               onDone={() => setCustomerTab('home')}
               onRetry={() => setCustomerTab('send')}
             />
@@ -321,6 +381,7 @@ export function App() {
                 setReportTargetTxn(match);
                 setCustomerTab('report');
               }}
+              onReportToCyberCell={(n) => void handleReportToCyberCell(n)}
             />
           )}
 
@@ -337,9 +398,10 @@ export function App() {
           {customerTab === 'profile' && (
             <ProfileScreen
               account={activeAccount}
-              onTriggerDemoComplete={refreshAll}
+              onProfileUpdated={refreshAll}
               onNotify={(type, title, msg) => pushToast(type, title, msg)}
               onLogout={() => {
+                setSavedAccountId(null);
                 setActiveAccount(null);
                 setTransactions([]);
                 setCustomerNotifs([]);
