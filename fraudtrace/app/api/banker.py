@@ -14,7 +14,11 @@ from fraudtrace.app.services.lineage_service import activate_trace
 from fraudtrace.app.services.report_service import generate_investigation_report
 from fraudtrace.app.services.notification_service import create_notification
 from fraudtrace.app.services.graph_service import get_graph_for_account
-from fraudtrace.app.services.ai_model_service import compute_and_store_risk_assessment
+from fraudtrace.app.services.ai_model_service import (
+    compute_and_store_risk_assessment,
+    get_ai_live_feed,
+    save_case_ai_graph,
+)
 from fraudtrace.app.models.risk_assessment import RiskAssessment
 from fraudtrace.app.utils.identifiers import (
     generate_allocation_id,
@@ -151,6 +155,9 @@ def freeze_account_and_report(
     if not acc:
         raise HTTPException(status_code=404, detail=f"Account {account_id} not found")
 
+    # Capture exact AI Model graph BEFORE marking alerts as REPORTED
+    live_graph_snapshot = get_ai_live_feed(db).get("graph") or {}
+
     acc.is_frozen = True
     acc.is_active = False
 
@@ -196,6 +203,12 @@ def freeze_account_and_report(
             db.commit()
             activate_trace(db, case_id, latest_txn.transaction_id, latest_txn.amount_paise)
             db.commit()
+
+        if live_graph_snapshot.get("nodes"):
+            for n in live_graph_snapshot["nodes"]:
+                if n.get("id") == account_id:
+                    n["is_frozen"] = True
+            save_case_ai_graph(case_id, live_graph_snapshot)
 
         report = generate_investigation_report(db, case_id)
     else:

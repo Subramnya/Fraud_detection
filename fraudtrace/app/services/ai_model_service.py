@@ -13,7 +13,9 @@ from fraudtrace.app.services.graph_service import build_transaction_graph, _grap
 from fraudtrace.app.utils.helpers import paise_to_rupees
 from fraudtrace.app.utils.identifiers import generate_assessment_id
 import json
+import os
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 
 class FraudAIModel:
@@ -321,10 +323,74 @@ def build_ai_fraud_graph(
     return graph_json
 
 
+_GRAPH_DIR = Path("data")
+
+
+def save_case_ai_graph(case_id: str | None, graph_json: dict) -> None:
+    """Persist the exact AI-generated graph snapshot for a Case ID."""
+    if not case_id or not graph_json or not graph_json.get("nodes"):
+        return
+    _GRAPH_DIR.mkdir(parents=True, exist_ok=True)
+    path = _GRAPH_DIR / f"graph_{case_id}.json"
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(graph_json, f, default=str)
+
+
+def load_case_ai_graph(case_id: str | None) -> dict | None:
+    """Load a previously saved exact AI graph snapshot for a Case ID, if present."""
+    if not case_id:
+        return None
+    path = _GRAPH_DIR / f"graph_{case_id}.json"
+    if not path.exists():
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and data.get("nodes"):
+            return data
+    except Exception:
+        return None
+    return None
+
+
+def refresh_graph_freeze_flags(db: Session, graph_json: dict) -> dict:
+    """Refresh live is_frozen flags on a stored graph snapshot without altering layout/edges."""
+    nodes = graph_json.get("nodes") or []
+    if not nodes:
+        return graph_json
+    node_ids = [n.get("id") for n in nodes if n.get("id")]
+    if not node_ids:
+        return graph_json
+    frozen_map = {
+        a.account_id: bool(getattr(a, "is_frozen", False))
+        for a in db.query(Account).filter(Account.account_id.in_(node_ids)).all()
+    }
+    for n in nodes:
+        nid = n.get("id")
+        if nid in frozen_map:
+            n["is_frozen"] = frozen_map[nid]
+    return graph_json
+
+
 def get_ai_graph_for_case(
     db: Session, case_id: str | None = None, account_id: str | None = None
 ) -> dict:
     """Retrieve the exact AI-generated fraud graph for a Case ID or Account ID."""
+    # 1. Exact saved snapshot for this case (captured before alerts were marked REPORTED)
+    saved = load_case_ai_graph(case_id)
+    if saved:
+        saved = refresh_graph_freeze_flags(db, saved)
+        saved["available"] = len(saved.get("nodes", [])) > 0
+        return saved
+
+    # 2. Exact live AI Model graph if alerts are still active
+    live_feed = get_ai_live_feed(db)
+    live_graph = live_feed.get("graph") or {}
+    if live_graph.get("nodes"):
+        live_graph["available"] = True
+        return live_graph
+
+    # 3. Fallback: reconstruct using the exact same 1-hop alert-centered logic as get_ai_live_feed
     seed_accounts: set[str] = set()
     txn_ids: set[str] = set()
 
@@ -362,8 +428,7 @@ def get_ai_graph_for_case(
     if not seed_accounts and not txn_ids:
         return {"available": False, "nodes": [], "edges": [], "final_destination_accounts": []}
 
-    # Expand 1-2 hops from seed accounts so all multi-hop mesh connections are included
-    txns = (
+    seed_txns = (
         db.query(Transaction)
         .filter(
             (Transaction.sender_account_id.in_(seed_accounts))
@@ -374,32 +439,34 @@ def get_ai_graph_for_case(
         .all()
     )
     hop_accounts = set(seed_accounts)
-    for t in txns:
+    for t in seed_txns:
         hop_accounts.add(t.sender_account_id)
         hop_accounts.add(t.receiver_account_id)
-
-    all_txns = (
-        db.query(Transaction)
-        .filter(
-            (Transaction.sender_account_id.in_(hop_accounts))
-            | (Transaction.receiver_account_id.in_(hop_accounts))
-        )
-        .order_by(Transaction.created_at.asc())
-        .limit(80)
-        .all()
-    )
-
-    if not all_txns:
-        return {"available": False, "nodes": [], "edges": [], "final_destination_accounts": []}
 
     alerts = (
         db.query(FraudAlert)
         .filter(FraudAlert.account_id.in_(hop_accounts))
+        .order_by(FraudAlert.created_at.desc())
+        .limit(50)
         .all()
     )
-    alert_accounts = {a.account_id for a in alerts} | seed_accounts
+    alert_accounts = {a.account_id for a in alerts} if alerts else set(seed_accounts)
 
-    graph_json = build_ai_fraud_graph(db, all_txns, alert_accounts, alerts)
+    txns = (
+        db.query(Transaction)
+        .filter(
+            (Transaction.sender_account_id.in_(alert_accounts))
+            | (Transaction.receiver_account_id.in_(alert_accounts))
+        )
+        .order_by(Transaction.created_at.asc())
+        .limit(60)
+        .all()
+    )
+
+    if not txns:
+        return {"available": False, "nodes": [], "edges": [], "final_destination_accounts": []}
+
+    graph_json = build_ai_fraud_graph(db, txns, alert_accounts, alerts)
     graph_json["available"] = len(graph_json["nodes"]) > 0
     return graph_json
 

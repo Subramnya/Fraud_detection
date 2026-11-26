@@ -9,8 +9,11 @@ from fraudtrace.app.models.cybercell_report import CyberCellReport
 from fraudtrace.app.models.account import Account
 from fraudtrace.app.models.fraud_alert import FraudAlert
 from fraudtrace.app.models.transaction import Transaction
-from fraudtrace.app.services.graph_service import build_transaction_graph, _graph_to_json
-from fraudtrace.app.services.ai_model_service import _compute_tree_xy_layout, get_ai_graph_for_case
+from fraudtrace.app.services.ai_model_service import (
+    get_ai_graph_for_case,
+    refresh_graph_freeze_flags,
+    save_case_ai_graph,
+)
 from fraudtrace.app.utils.helpers import paise_to_rupees
 
 router = APIRouter(prefix="/api/cybercell", tags=["Cyber Cell"])
@@ -96,15 +99,11 @@ def submit_to_cybercell(request: CyberCellSubmit, db: Session = Depends(get_db))
         .all()
     )
 
-    G = build_transaction_graph(db, txns)
-    coords = _compute_tree_xy_layout(G, {request.account_id})
-    graph_json = _graph_to_json(G)
-    for node in graph_json["nodes"]:
-        nid = node["id"]
-        pos = coords.get(nid, {"x": 100, "y": 200, "layer": 0})
-        node["x"] = pos["x"]
-        node["y"] = pos["y"]
-        node["layer"] = pos["layer"]
+    graph_json = get_ai_graph_for_case(
+        db, case_id=request.case_id, account_id=request.account_id
+    )
+    if request.case_id and graph_json.get("nodes"):
+        save_case_ai_graph(request.case_id, graph_json)
 
     report_id = f"CYB_{uuid.uuid4().hex[:8].upper()}"
     text_report = _build_text_report(
@@ -172,8 +171,18 @@ def update_cybercell_status(
 
 @router.get("/reports/{report_id}/graph")
 def get_cybercell_report_graph(report_id: str, db: Session = Depends(get_db)):
-    """Retrieve the exact live AI-generated fraud transaction graph associated with this report's Case ID."""
+    """Retrieve the exact live AI-generated fraud transaction graph associated with this report."""
     rec = db.query(CyberCellReport).filter(CyberCellReport.report_id == report_id).first()
     if not rec:
         raise HTTPException(status_code=404, detail=f"Report {report_id} not found")
+    if rec.report_payload:
+        try:
+            payload = json.loads(rec.report_payload)
+            stored_graph = payload.get("graph") if isinstance(payload, dict) else None
+            if isinstance(stored_graph, dict) and stored_graph.get("nodes"):
+                stored_graph = refresh_graph_freeze_flags(db, stored_graph)
+                stored_graph["available"] = True
+                return stored_graph
+        except Exception:
+            pass
     return get_ai_graph_for_case(db, case_id=rec.case_id, account_id=rec.account_id)
